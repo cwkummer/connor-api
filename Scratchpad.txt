@@ -1,0 +1,11 @@
+{"type":"REGISTER_ATTEMPT","sessionID":"ABCD1234"}
+{"type":"RELEASE_ATTEMPT","sessionID":"ABCD1234"}
+
+{"type":"VERIFY","sessionID":"ABCD1234","data":{"name":"Chris Kummer","address":"4116 Wood Spice Way"}}
+
+--
+
+{"type":"REGISTER_ATTEMPT","sessionID":"EFGH5678"}
+{"type":"RELEASE_ATTEMPT","sessionID":"EFGH5678"}
+
+{"type":"VERIFY","sessionID":"EFGH5678","data":{"name":"Aaron Judge","address":"1 Awesome Street"}}
