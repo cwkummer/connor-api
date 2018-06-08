@@ -1,4 +1,5 @@
 const Promise = bluebird = require('bluebird')
+const uuid = require('uuid/v4');
 
 // Connect to redis
 const redis = require('redis')
@@ -14,39 +15,45 @@ const webSocket = require('ws')
 const wss = new webSocket.Server({ port: 8989 })
 let webSockets = {}
 
-// Generate random integer
-const getRandomInt = (min, max) => {
-  return Math.floor(Math.random() * (max - min + 1)) + min
+// Get globally unique sessionPIN
+const getSessionPIN = async () => {
+  do { sessionPIN = Math.floor(Math.random() * (100000)) }
+  while (await client.existsAsync(sessionPIN))
+  return sessionPIN
 }
 
-// Check for 
-const updateMapping = async () => {
-  await client.set(, "string val", 
-  console.log(res)
-}
-
-// Receive sub messages and send to websocket if exists
+// Receive sub messages and send to target websocket if it exists
 sub.on('message', (channel, msg) => {
   let sessionID = JSON.parse(msg).sessionID
   if ((sessionID) && (webSockets[sessionID])) { webSockets[sessionID].send(msg) }
 })
 
-wss.on('connection', (ws) => {
+wss.on('connection', async (ws) => {
   // New websocket connection
-  let sessionID
-  do {
-    sessionID = getRandomInt(0, 99999)
-  } while (webSockets[sessionID])
+  let sessionPIN = await getSessionPIN() 
+  let sessionID = uuid()
+  ws.isAlive = true
+  ws.sessionID = sessionID
+  ws.sessionPIN = sessionPIN
   webSockets[sessionID] = ws
+  let registerRecord = JSON.stringify({ sessionID: sessionID, userID: "" })
+  let res = await client.setAsync(sessionPIN, registerRecord)
   ws.send(JSON.stringify({
     type: 'REGISTER_SUCCESS',
+    sessionPIN: sessionPIN,
     sessionID: sessionID
   }))
   let message = JSON.stringify({
     type: 'NEW_CLIENT',
+    sessionPIN: sessionPIN,
     sessionID: sessionID
   })
   pub.publish('connor-global', message)
+  // React to Pong events
+  ws.on('pong', () => {
+    ws.isAlive = true
+    console.log(`${ws.sessionID} is alive!`)
+  })
   // Close websocket connection
   ws.on('close', () => { delete webSockets[sessionID] })
   // Message on existing websocket connection
@@ -61,3 +68,17 @@ wss.on('connection', (ws) => {
     }
   })
 })
+
+// Ping all websockets every 10 seconds
+setInterval(() => {
+  console.log(Object.keys(webSockets).length)
+  wss.clients.forEach((ws) => {
+    if (!ws.isAlive) {
+      console.log(`${ws.sessionID} is dead!`)
+      return ws.terminate()
+    }
+    ws.isAlive = false
+    console.log(`Pinging ${ws.sessionID}`)
+    ws.ping(null, false, true)
+  })
+}, 10000)
