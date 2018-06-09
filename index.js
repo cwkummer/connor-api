@@ -1,4 +1,5 @@
 const Promise = bluebird = require('bluebird')
+const winston = require('winston');
 
 // Connect to redis
 const redis = require('redis')
@@ -11,10 +12,36 @@ sub.subscribe('connor-global')
 
 // Configure websocket server
 const webSocket = require('ws')
-const wss = new webSocket.Server({ port: 8989 })
+let wsPort = process.env.WS_PORT || 8989
+const wss = new webSocket.Server({ port: wsPort })
+winston.info(`connor-api: Websocket server started on port ${wsPort}`)
 let webSockets = {}
 
-// Get globally unique sessionPIN
+// Configure REST server
+const express = require('express')
+const cors = require('cors')
+const compression = require('compression')
+const bodyParser = require('body-parser')
+const app = express()
+const router = express.Router()
+app.use(cors())
+app.use(compression())
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+app.use('/api', router)
+app.use((err, req, res) => {
+  handleError(err, req, res); /* eslint-disable-line */
+});
+let restPort = process.env.REST_PORT || 8990
+app.listen(restPort)
+winston.info(`connor-api: REST server started on port ${restPort}`)
+
+const handleError = (err, req, res) => {
+  winston.error('connor-api - ', err);
+  return res.sendStatus(err.status || 500);
+};
+
+// Get globally unique sessionID
 const getSessionID = async () => {
   do { sessionID = Math.floor(Math.random() * (100000)) }
   while (await client.existsAsync(sessionID))
@@ -41,13 +68,13 @@ sub.on('message', (channel, msg) => {
 
 wss.on('connection', async (ws) => {
   ws.isAlive = true
-  // React to Pong events
+  // Pong event
   ws.on('pong', () => {
     ws.isAlive = true
-    if (ws.sessionID) { client.expireAsync(sessionID, 3600) }
+    if (ws.sessionID) { client.expireAsync(ws.sessionID, 3600) }
     console.log(`${ws.sessionID} - alive`)
   })
-  // Close websocket connection
+  // Close event
   ws.on('close', () => {
     if (ws.sessionID) {
       delete webSockets[ws.sessionID]
@@ -55,15 +82,15 @@ wss.on('connection', async (ws) => {
     }
     console.log(`${ws.sessionID} - closed`)
   })
-  // Message on existing websocket connection
+  // Message event
   ws.on('message', async (message) => {
     const data = JSON.parse(message)
     switch (data.type) {
-      case 'REGISTER_ATTEMPT': {
+      case 'CONNECT_ATTEMPT': {
         ws.sessionID = await getSessionID() 
         await registerClient(ws)
         ws.send(JSON.stringify({
-          type: 'REGISTER_SUCCESS',
+          type: 'CONNECT_SUCCESS',
           sessionID: ws.sessionID
         }))
         break
@@ -96,4 +123,18 @@ setInterval(async () => {
     console.log(`${ws.sessionID} - ping`)
     ws.ping(null, false, true)
   })
-}, 10000)
+}, 3000)
+
+// REST route - Health check
+router.route('/healthcheck').get((req, res) => res.sendStatus(200))
+
+// REST route - POST from EASE of records to verify on ChromeBook
+router.route('/sendVerify').post((req, res) => {
+  try {
+    console.log(req.body)
+    pub.publish('connor-global', JSON.stringify(req.body))
+    return res.sendStatus(200)
+  } catch (err) {
+    handleError(err, req, res);
+  }
+});
