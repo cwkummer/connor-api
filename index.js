@@ -43,7 +43,7 @@ const handleError = (err, req, res) => {
 
 // Get globally unique sessionID
 const getSessionID = async () => {
-  do { sessionID = Math.floor(Math.random() * (100000)) }
+  do { sessionID = Math.floor(Math.random() * 90000) + 10000 }
   while (await client.existsAsync(sessionID))
   return sessionID
 }
@@ -51,8 +51,8 @@ const getSessionID = async () => {
 // Register a new client
 const registerClient = async (ws) => {
   webSockets[ws.sessionID] = ws
-  let registerRecord = JSON.stringify({ sessionID: ws.sessionID, userID: "" })
-  let res = await client.setexAsync(ws.sessionID, 3600, registerRecord)
+  let registerRecord = JSON.stringify({ sessionID: ws.sessionID, isPaired: false })
+  await client.setexAsync(ws.sessionID, 3600, registerRecord)
   let message = JSON.stringify({
     type: 'NEW_CLIENT',
     sessionID: ws.sessionID
@@ -87,7 +87,7 @@ wss.on('connection', async (ws) => {
     const data = JSON.parse(message)
     switch (data.type) {
       case 'CONNECT_ATTEMPT': {
-        ws.sessionID = await getSessionID() 
+        ws.sessionID = await getSessionID()
         await registerClient(ws)
         ws.send(JSON.stringify({
           type: 'CONNECT_SUCCESS',
@@ -96,6 +96,23 @@ wss.on('connection', async (ws) => {
         break
       }
       case 'RECONNECT_ATTEMPT': {
+        // Check for required fields (sessionID and easeID)
+        if ((!data.sessionID) || (!data.easeID)) {
+          ws.send(JSON.stringify({ type: 'RECONNECT_FAILURE', error: 400 }))
+          break
+        }
+        // Check that reg record exists
+        let regRecord = await client.getAsync(data.sessionID)
+        if (!regRecord) {
+          ws.send(JSON.stringify({ type: 'RECONNECT_FAILURE', error: 404 }))
+          break
+        }
+        // Check that easeID matches and reg record is paired
+        regRecord = JSON.parse(regRecord)
+        if ((!regRecord.isPaired) || (regRecord.easeID !== data.easeID)) {
+          ws.send(JSON.stringify({ type: 'RECONNECT_FAILURE', error: 403 }))
+          break
+        }
         ws.sessionID = data.sessionID
         await registerClient(ws)
         ws.send(JSON.stringify({
@@ -137,4 +154,22 @@ router.route('/sendVerify').post((req, res) => {
   } catch (err) {
     handleError(err, req, res);
   }
-});
+})
+
+// REST route - Post from ease to "pair"
+router.route('/pair').post(async (req, res) => {
+  try {
+    // Check for required fields (sessionID and easeID)
+    if ((!req.body.sessionID) || (!req.body.easeID)) { return res.sendStatus(400) }
+    // Check that reg record exists
+    let curRegRecord = await client.getAsync(req.body.sessionID)
+    if (!curRegRecord) { return res.sendStatus(404) }
+    // Check that reg record is not paired
+    if (curRegRecord.isPaired) { return res.sendStatus(403) }
+    let newRegRecord = JSON.stringify({ sessionID: req.body.sessionID, isPaired: true, easeID: req.body.easeID })
+    await client.setexAsync(req.body.sessionID, 3600, newRegRecord)
+    return res.sendStatus(200)
+  } catch (err) {
+    handleError(err, req, res);
+  }
+})
